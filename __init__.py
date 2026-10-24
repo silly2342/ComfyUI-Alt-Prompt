@@ -1,20 +1,24 @@
-# Drop this folder into ComfyUI/custom_nodes/alt_prompt/ and restart ComfyUI.
-#
-# Syntax (A1111 style):
-#   [a|b]     alternate a, b, a, b ... every step
-#   [a||]     a, empty, empty, a, empty, empty ...
-#   [a|b|c]   cycles by step % len
-#
-# Only brackets that contain a pipe are treated as alternation, so JSON arrays
-# like [10,20,100,100] are left alone (just don't put a "|" inside them).
-
 import re
 import node_helpers
 
+# [from:to:when]  from until `when`, then to      e.g. [cat:dog:0.5]
+# [to:when]       nothing until `when`, then to    e.g. [dog:0.5]
+# [from::when]    from until `when`, then nothing  e.g. [cat::0.5]
+# `when` < 1 is a fraction of the sampled steps, >= 1 is an exact step number.
+SWITCH = re.compile(r"\[([^\[\]:|]*)(?::([^\[\]:|]*))?:(\d+(?:\.\d+)?)\]")
+# [a|b|c] alternation, cycles by step
 ALT = re.compile(r"\[([^\[\]]*\|[^\[\]]*)\]")
 
 
-def resolve(text, step):
+def resolve(text, step, total):
+    def sw(m):
+        a, b, when = m.group(1), m.group(2), float(m.group(3))
+        if b is None:                      # [to:when]
+            a, b = "", a
+        switch_step = when * total if when < 1 else when
+        return a if step < switch_step else b
+
+    text = SWITCH.sub(sw, text)
     return ALT.sub(
         lambda m: (lambda opts: opts[step % len(opts)])(m.group(1).split("|")),
         text,
@@ -22,7 +26,6 @@ def resolve(text, step):
 
 
 def sigma_to_percent(ms, sigma):
-    # percent_to_sigma is monotonically decreasing, so bisect
     lo, hi = 0.0, 1.0
     for _ in range(40):
         mid = (lo + hi) / 2
@@ -51,10 +54,9 @@ class AltPromptEncode:
 
     def encode(self, clip, model, sigmas, text):
         ms = model.get_model_object("model_sampling")
-        n = len(sigmas) - 1  # number of steps
+        n = len(sigmas) - 1
         sig = [float(s) for s in sigmas]
 
-        # step boundaries as percents, split at midpoints between neighbouring sigmas
         bounds = (
             [0.0]
             + [sigma_to_percent(ms, (sig[i - 1] + sig[i]) / 2) for i in range(1, n)]
@@ -63,8 +65,8 @@ class AltPromptEncode:
 
         cache, out = {}, []
         for i in range(n):
-            prompt = resolve(text, i)
-            if prompt not in cache:  # encode each unique prompt only once
+            prompt = resolve(text, i, n)
+            if prompt not in cache:
                 cache[prompt] = clip.encode_from_tokens_scheduled(clip.tokenize(prompt))
             for cond in cache[prompt]:
                 out += node_helpers.conditioning_set_values(
