@@ -1,6 +1,8 @@
 import re
 import node_helpers
 
+from .lora_curve import LoraHookLoad, LoraHookAlternate, LoraHooksApply
+
 # [from:to:when]  from until `when`, then to      e.g. [cat:dog:0.5]
 # [to:when]       nothing until `when`, then to    e.g. [dog:0.5]
 # [from::when]    from until `when`, then nothing  e.g. [cat::0.5]
@@ -8,6 +10,47 @@ import node_helpers
 SWITCH = re.compile(r"\[([^\[\]:|]*)(?::([^\[\]:|]*))?:(\d+(?:\.\d+)?)\]")
 # [a|b|c] alternation, cycles by step
 ALT = re.compile(r"\[([^\[\]]*\|[^\[\]]*)\]")
+
+
+# <from:to:when>  same as [from:to:when], but may contain other brackets, e.g. <cat:[a|b]:0.5>
+# <to:when> and <from::when> work too. Nesting <> inside <> is fine.
+ANGLE = re.compile(r"<([^<>]*)>")
+NUMBER = re.compile(r"^\d+(?:\.\d+)?$")
+_OPEN, _CLOSE = "\x00", "\x01"      # protects <...> that is not a switch command
+
+
+def _split_top(s):
+    """Split on ':' but not inside [ ] brackets."""
+    parts, cur, depth = [], [], 0
+    for ch in s:
+        if ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth = max(0, depth - 1)
+        if ch == ":" and depth == 0:
+            parts.append("".join(cur))
+            cur = []
+        else:
+            cur.append(ch)
+    parts.append("".join(cur))
+    return parts
+
+
+def _resolve_angle(text, step, total):
+    def sw(m):
+        parts = _split_top(m.group(1))
+        if len(parts) in (2, 3) and NUMBER.match(parts[-1].strip()):
+            when = float(parts[-1])
+            a, b = ("", parts[0]) if len(parts) == 2 else (parts[0], parts[1])
+            switch_step = when * total if when < 1 else when
+            return a if step < switch_step else b
+        return _OPEN + m.group(1) + _CLOSE    # not a command, leave it alone
+
+    while True:                                # innermost first, until nothing left
+        new = ANGLE.sub(sw, text)
+        if new == text:
+            return text
+        text = new
 
 
 def resolve(text, step, total):
@@ -18,11 +61,13 @@ def resolve(text, step, total):
         switch_step = when * total if when < 1 else when
         return a if step < switch_step else b
 
+    text = _resolve_angle(text, step, total)
     text = SWITCH.sub(sw, text)
-    return ALT.sub(
+    text = ALT.sub(
         lambda m: (lambda opts: opts[step % len(opts)])(m.group(1).split("|")),
         text,
     )
+    return text.replace(_OPEN, "<").replace(_CLOSE, ">")
 
 
 def sigma_to_percent(ms, sigma):
@@ -76,5 +121,15 @@ class AltPromptEncode:
         return (out,)
 
 
-NODE_CLASS_MAPPINGS = {"AltPromptEncode": AltPromptEncode}
-NODE_DISPLAY_NAME_MAPPINGS = {"AltPromptEncode": "Alt Prompt Encode (A1111 style)"}
+NODE_CLASS_MAPPINGS = {
+    "AltPromptEncode": AltPromptEncode,
+    "LoraHookLoad": LoraHookLoad,
+    "LoraHookAlternate": LoraHookAlternate,
+    "LoraHooksApply": LoraHooksApply,
+}
+NODE_DISPLAY_NAME_MAPPINGS = {
+    "AltPromptEncode": "Alt Prompt Encode (A1111 style)",
+    "LoraHookLoad": "LoRA Hook Load (curve)",
+    "LoraHookAlternate": "LoRA Hook Alternate (on/off by step)",
+    "LoraHooksApply": "LoRA Hooks Apply",
+}
