@@ -19,6 +19,14 @@ The node is **Alt Prompt Encode (A1111 style)** in the `conditioning` category.
 - `[a::0.5]`   a for the first half, then nothing
 - `when` below 1 is a fraction of the sampled steps; 1 or above is an exact step number.
 
+### Switching with nesting: `<from:to:when>`
+Same as `[from:to:when]`, but allowed to contain other brackets:
+- `<cat:[a|b]:0.5>`   cat for the first half, then a/b alternating
+- `[a|<x:y:0.5>]`     alternate between a and (x then y)
+- `<to:when>` and `<from::when>` work like the square versions.
+- Angle brackets that aren't a switch (no number at the end) are left alone.
+- Heads up: A1111-style `<lora:name:0.8>` tags look like a switch and WILL be changed.
+
 Both can be combined in one prompt. Brackets without a `|` or a trailing
 number (e.g. JSON boxes like [10,20,100,100]) are left alone.
 Nesting one bracket inside another is not supported.
